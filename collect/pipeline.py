@@ -27,6 +27,9 @@ from rag.prompts import KEYWORD_SYSTEM, SELECT_SYSTEM, build_keyword_prompt, bui
 from store.vectordb import index_document
 
 MANIFEST_PATH = config.CACHE_DIR / "collected.json"
+# 다른 나라 제도 문서 — 프롬프트 2 규칙으로는 "미국 예금보험공사"가 두 번 선별됐다. 질문이 그 나라를 묻지 않으면
+# LLM 에 보이기 전에 코드로 뺀다. (규칙은 프롬프트에도 남겨 둔다)
+FOREIGN_PREFIXES = ("미국", "일본", "중국", "영국", "독일", "프랑스", "캐나다", "호주", "홍콩", "대만", "싱가포르", "유럽")
 SEARCH_LIMIT = 5      # 검색어당 후보 수
 MAX_KEYWORDS = 3
 
@@ -143,6 +146,10 @@ def collect_for_question(
                 seen.add(doc_id)
                 if doc_id in indexed:
                     report["already_indexed"].append(hit["title"])
+                    continue
+                country = next((c for c in FOREIGN_PREFIXES if hit["title"].startswith(c)), None)
+                if country and country not in question:
+                    report["rejected"].append(hit["title"])
                     continue
                 candidates.append({**hit, "doc_id": doc_id, "keyword": keyword})
 
