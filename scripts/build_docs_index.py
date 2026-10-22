@@ -16,24 +16,14 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config  # noqa: E402
+from collect.pipeline import fetch_company_page  # noqa: E402
 from collect.wiki import fetch_page  # noqa: E402
-from domain.products import COMMON_WIKI_TITLES, company_wiki_candidates, load_products  # noqa: E402
+from domain.products import COMMON_WIKI_TITLES, load_products  # noqa: E402
 from store.vectordb import count, get_store, index_document  # noqa: E402
 
 
 def _normalized(text: str) -> str:
     return text.replace(" ", "")
-
-
-def fetch_company_page(company: str) -> dict | None:
-    """금융사 문서를 정확한 제목(넘겨주기 포함)으로만 찾는다. 검색은 엉뚱한 문서가 섞여 쓰지 않는다.
-    넘겨주기로 다른 문서에 도착했을 때 제목에 금융사 이름이 없으면 버린다.
-    """
-    for title in company_wiki_candidates(company):
-        page = fetch_page(title)
-        if page and _normalized(company_wiki_candidates(company)[-1]) in _normalized(page["title"]):
-            return page
-    return None
 
 
 def main() -> None:

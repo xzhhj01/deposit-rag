@@ -4,9 +4,10 @@
 
 retrieve
     ① 선택한 상품의 메타 청크 — 검색 없이 id 로 꺼내 항상 근거 1번에 둔다
-    ② 외부 문서 청크 — 두 가지 검색어로 찾아 병합한다
+    ② 외부 문서 청크 — 여러 검색어로 찾아 병합한다
          · 질문 원문                  → 개념 질문("단리랑 복리 차이")에 강하다
          · 금융사 + 상품명 + 질문      → "이 은행", "여기"처럼 대상을 생략한 질문에 강하다
+         · 프롬프트 1 이 뽑은 검색어들  → 주제가 여럿 섞인 질문에 강하다
        검색 범위 = 공통 문서 + 그 금융사 문서 + 그 상품 문서 (다른 금융사 문서가 섞이지 않게)
     ③ 너무 먼 청크는 버리고, 같은 문서의 같은 조각은 하나로 합친 뒤(중복 제거)
        두 검색의 순위를 RRF 로 합쳐 Top-k
@@ -31,6 +32,7 @@ class RagState(TypedDict, total=False):
     # 입력
     product_id: str
     question: str
+    keywords: list[str]      # 수집 단계(프롬프트 1)가 뽑은 검색어 — 검색에도 함께 쓴다
     history: list[dict]      # 최근 대화 [{"role", "content"}]
     # retrieve 결과
     item_label: str
@@ -55,13 +57,15 @@ def _meta_source(meta_store: Chroma, product_id: str) -> dict | None:
     }
 
 
-def _doc_sources(docs_store: Chroma, meta: dict, question: str) -> list[dict]:
+def _doc_sources(docs_store: Chroma, meta: dict, question: str, keywords: list[str]) -> list[dict]:
     where = {"$or": [
         {"scope": "common"},
         {"company": meta["company"]},
         {"product_id": meta["product_id"]},
     ]}
-    queries = [question, f"{meta['company']} {meta['name']} {question}"]
+    # 주제가 둘 섞인 질문("세금은? 중도해지는?")은 질문 전체로 검색하면 어느 쪽에도 가깝지 않다.
+    # 수집 단계가 뽑은 검색어로도 따로 찾아 RRF 로 합친다.
+    queries = [question, f"{meta['company']} {meta['name']} {question}", *keywords]
 
     merged: dict[str, dict] = {}
     for query in queries:
@@ -97,7 +101,7 @@ def build_graph(meta_store: Chroma, docs_store: Chroma, model: BaseChatModel, hi
         if meta_source is None:
             return {"sources": [], "item_label": state["product_id"]}
         meta = meta_source.pop("_meta")
-        sources = [meta_source] + _doc_sources(docs_store, meta, state["question"])
+        sources = [meta_source] + _doc_sources(docs_store, meta, state["question"], state.get("keywords", []))
         label = f"{meta['name']} · {meta['company']}"
         return {"sources": sources, "item_label": label}
 

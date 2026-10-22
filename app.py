@@ -7,7 +7,8 @@ streamlit_lab/step7_skeleton.py 골격에서 출발했다.
     ① 상품 선택 — 유형 · 금융권으로 좁힌 뒤 고른다              (F2009)
     ② 대화 기록을 상품별로 따로 저장한다                        (F2009)
     ③ 키 누락 · 데이터 없음 · 색인 없음 안내, 금융 면책 안내     (F2012)
-    ④ 질문 → RAG 그래프(retrieve → generate) → 인용된 근거만 표시 (F2006 ~ F2008)
+    ④ 질문 → 문서 수집(프롬프트 1 · 2) → RAG 그래프(retrieve → generate) → 인용된 근거만 표시
+                                                                          (F2003 ~ F2008)
 UI 는 화면만 그린다. 검색 · 생성은 rag/graph.py 가 한다. (NF2005)
 """
 
@@ -16,6 +17,7 @@ import re
 import streamlit as st
 
 import config
+from collect.pipeline import collect_for_question
 from domain.products import build_item_text, label, load_products
 from rag.graph import build_graph
 from rag.llm import get_model
@@ -51,6 +53,22 @@ def cached_graph():
 def cached_products() -> dict[str, dict]:
     """상품 ID → 상품. 파일을 매번 다시 읽지 않도록 값을 캐시한다."""
     return {p["product_id"]: p for p in load_products()}
+
+
+def collect_summary(report: dict) -> str:
+    """수집 결과 한 줄 — 무엇을 찾아 무엇을 골랐는지. 프롬프트 전문은 보이지 않는다. (NF2004)"""
+    if report["from_cache"]:
+        return "✓ 이미 수집한 질문 — 저장된 문서 사용"
+    if not report["keywords"]:
+        return "✓ 상품 공시만으로 답할 수 있는 질문 — 추가 수집 없음"
+    parts = [f"검색어: {', '.join(report['keywords'])}"]
+    if report["selected"]:
+        parts.append(f"새로 수집: {', '.join(report['selected'])}")
+    if report["rejected"]:
+        parts.append(f"제외 {len(report['rejected'])}건")
+    if not report["new_keywords"]:
+        parts.append("모두 이미 수집됨")
+    return " · ".join(parts)
 
 
 # ── 근거 표시 (F2008) — step7 그대로, 출처 유형만 더했다 ───────────────
@@ -149,12 +167,20 @@ if question:
     with st.chat_message("assistant"):
         # 최근 대화를 함께 넘겨 "그럼 2년이면?" 같은 이어지는 질문을 이해하게 한다. (step6)
         history = [{"role": m["role"], "content": m["content"]} for m in messages[:-1]]
-        state = {"product_id": product_id, "question": question, "history": history}
         sources, answer = [], ""
 
-        # 그래프를 노드 단위로 흘려 받아(stream) 진행 상태를 단계별로 바꾼다. (F2012)
-        with st.status("근거를 찾고 있습니다...", expanded=False) as status:
+        # 수집 → 그래프(retrieve → generate). 단계마다 진행 상태를 바꾼다. (F2012)
+        with st.status("관련 문서를 확인하고 있습니다...", expanded=False) as status:
             try:
+                report = collect_for_question(
+                    product, label(product), question, get_model(), cached_docs_store(),
+                    on_progress=lambda message: status.update(label=message),
+                )
+                st.caption(collect_summary(report))
+
+                state = {"product_id": product_id, "question": question,
+                         "keywords": report["keywords"], "history": history}
+                status.update(label="근거를 찾고 있습니다...")
                 for update in cached_graph().stream(state, stream_mode="updates"):
                     if "retrieve" in update:
                         sources = update["retrieve"]["sources"]

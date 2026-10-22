@@ -14,6 +14,7 @@ sys.stderr.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config  # noqa: E402
+from collect.pipeline import collect_for_question  # noqa: E402
 from domain.products import label, load_products  # noqa: E402
 from rag.graph import build_graph  # noqa: E402
 from rag.llm import get_model  # noqa: E402
@@ -21,7 +22,8 @@ from store.vectordb import get_store  # noqa: E402
 
 
 def main() -> None:
-    graph = build_graph(get_store(config.META_COLLECTION), get_store(config.DOCS_COLLECTION), get_model())
+    model, docs_store = get_model(), get_store(config.DOCS_COLLECTION)
+    graph = build_graph(get_store(config.META_COLLECTION), docs_store, model)
 
     if sys.argv[1:] == ["--graph"]:
         mermaid = graph.get_graph().draw_mermaid()
@@ -37,7 +39,18 @@ def main() -> None:
         raise SystemExit(f"'{name}'이(가) 들어간 상품이 없습니다.")
 
     print(f"상품: {product['name']} · {product['company']}  |  질문: {question}  |  Top-k {config.DOCS_TOP_K}")
-    result = graph.invoke({"product_id": product["product_id"], "question": question, "history": []})
+
+    # 수집 — 그래프를 돌리기 전에 한다 (검증 4.2: 검색어 · 색인된 문서 · 버려진 문서를 눈으로 확인)
+    report = collect_for_question(product, label(product), question, model, docs_store,
+                                  on_progress=lambda message: print(f"  · {message}"))
+    print("\n── 수집 (프롬프트 1 · 2) ──")
+    print(f"추출한 검색어  : {report['keywords']}  (새로 수집: {report['new_keywords']})")
+    print(f"선별 · 색인    : {report['selected']}  ({report['chunks']}청크)")
+    print(f"버린 후보      : {report['rejected']}")
+    print(f"이미 색인됨    : {report['already_indexed']}")
+
+    result = graph.invoke({"product_id": product["product_id"], "question": question,
+                           "keywords": report["keywords"], "history": []})
 
     print("\n── 근거 목록 (retrieve) ──")
     for i, s in enumerate(result["sources"], start=1):
