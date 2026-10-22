@@ -3,11 +3,12 @@
 실행 (project 폴더에서):
     streamlit run app.py
 
-streamlit_lab/step7_skeleton.py 골격에서 출발했다. 지금 단계(2단계)에서 채운 것:
+streamlit_lab/step7_skeleton.py 골격에서 출발했다.
     ① 상품 선택 — 유형 · 금융권으로 좁힌 뒤 고른다              (F2009)
     ② 대화 기록을 상품별로 따로 저장한다                        (F2009)
     ③ 키 누락 · 데이터 없음 · 색인 없음 안내, 금융 면책 안내     (F2012)
-    ④ 근거: 선택한 상품의 공시 정보(메타 청크) 1건만            ← 외부 문서 검색은 3~4단계에서 붙인다
+    ④ 질문 → RAG 그래프(retrieve → generate) → 인용된 근거만 표시 (F2006 ~ F2008)
+UI 는 화면만 그린다. 검색 · 생성은 rag/graph.py 가 한다. (NF2005)
 """
 
 import re
@@ -16,6 +17,7 @@ import streamlit as st
 
 import config
 from domain.products import build_item_text, label, load_products
+from rag.graph import build_graph
 from rag.llm import get_model
 from store.vectordb import count, get_store
 
@@ -31,13 +33,18 @@ HISTORY_TURNS = 6  # LLM에 함께 넘길 최근 대화 수 — 길어질수록 
 
 # ── 자원 (한 번만 만들고 모든 세션이 함께 쓴다) ─────────────────────────
 @st.cache_resource
-def cached_model():
-    return get_model()
+def cached_meta_store():
+    return get_store(config.META_COLLECTION)
 
 
 @st.cache_resource
-def cached_meta_store():
-    return get_store(config.META_COLLECTION)
+def cached_docs_store():
+    return get_store(config.DOCS_COLLECTION)
+
+
+@st.cache_resource
+def cached_graph():
+    return build_graph(cached_meta_store(), cached_docs_store(), get_model(), history_turns=HISTORY_TURNS)
 
 
 @st.cache_data
@@ -66,36 +73,6 @@ def render_sources(answer: str, sources: list[dict]) -> None:
             st.markdown(
                 f"**[근거 {number}]** {source['title']} · {source['source_type']} · [원문]({source['url']})"
             )
-
-
-# ── 근거 수집 (지금은 메타 청크 1건) ──────────────────────────────────
-def retrieve_sources(product_id: str) -> list[dict]:
-    """선택한 상품의 메타 청크를 Vector DB에서 id로 꺼낸다. 검색 없이 항상 포함하는 근거다. (F2006)"""
-    found = cached_meta_store().get(ids=[product_id])
-    if not found["ids"]:
-        return []
-    meta = found["metadatas"][0]
-    return [{
-        "title": f"{meta['name']} ({meta['company']})",
-        "source_type": f"상품 공시 · {meta['disclosed_month'][:4]}-{meta['disclosed_month'][4:]}",
-        "url": meta["url"],
-        "text": found["documents"][0],
-    }]
-
-
-def build_prompt(product: dict, sources: list[dict], question: str) -> str:
-    context = "\n\n".join(
-        f"[근거 {i}] {s['title']} ({s['source_type']})\n{s['text']}" for i, s in enumerate(sources, start=1)
-    )
-    return (
-        "너는 은행 예·적금 상품을 설명하는 금융상품 안내 전문가다.\n"
-        "규칙:\n"
-        "1. 아래 [근거]에 있는 내용만 사용한다. 기억이나 추측으로 답하지 않는다.\n"
-        "2. 근거에 없으면 '공시 자료에서 확인되지 않습니다'라고 답하고, 금융사에 확인하라고 안내한다.\n"
-        "3. 근거에서 온 문장 뒤에는 [근거 N] 형태로 번호를 붙인다.\n"
-        "4. 가입을 권유하거나 '좋은 상품'이라고 평가하지 않는다. 사실만 설명한다.\n\n"
-        f"[근거]\n{context}\n\n[선택한 상품]\n{label(product)}\n\n[질문]\n{question}"
-    )
 
 
 # ── 화면 ─────────────────────────────────────────────────────────────
@@ -170,20 +147,24 @@ if question:
         st.markdown(question)
 
     with st.chat_message("assistant"):
-        with st.status("근거를 찾고 있습니다...", expanded=False) as status:
-            sources = retrieve_sources(product_id)
-            status.update(label=f"근거 {len(sources)}건 확보", state="complete")
-            st.caption(" · ".join(s["title"] for s in sources))
-
         # 최근 대화를 함께 넘겨 "그럼 2년이면?" 같은 이어지는 질문을 이해하게 한다. (step6)
-        history = [{"role": m["role"], "content": m["content"]} for m in messages[:-1][-HISTORY_TURNS:]]
-        payload = history + [{"role": "user", "content": build_prompt(product, sources, question)}]
+        history = [{"role": m["role"], "content": m["content"]} for m in messages[:-1]]
+        state = {"product_id": product_id, "question": question, "history": history}
+        sources, answer = [], ""
 
-        with st.spinner("답변을 만드는 중..."):
+        # 그래프를 노드 단위로 흘려 받아(stream) 진행 상태를 단계별로 바꾼다. (F2012)
+        with st.status("근거를 찾고 있습니다...", expanded=False) as status:
             try:
-                answer = cached_model().invoke(payload).content
-            except Exception:
-                answer = ""
+                for update in cached_graph().stream(state, stream_mode="updates"):
+                    if "retrieve" in update:
+                        sources = update["retrieve"]["sources"]
+                        status.update(label=f"근거 {len(sources)}건 확보 · 답변을 만드는 중...")
+                        st.caption(" · ".join(f"{s['title']}({s['source_type'].split(' ·')[0]})" for s in sources))
+                    elif "generate" in update:
+                        answer = update["generate"]["answer"]
+                status.update(label=f"완료 · 검색한 근거 {len(sources)}건", state="complete")
+            except Exception:  # 상세 오류(트레이스백)는 화면에 내보내지 않는다 (NF2004)
+                status.update(label="처리 중 문제가 생겼습니다", state="error")
 
         if answer:
             st.markdown(answer)

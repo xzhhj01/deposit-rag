@@ -41,6 +41,8 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1000))     # 글자 수
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 200))  # 앞 청크와 겹치는 글자 수 — 문장이 경계에서 잘려도 의미가 이어지게
 
 # ── 검색 (F2006 · F2014) ─────────────────────────────────────────────
-DOCS_TOP_K = 5          # 외부 문서 청크를 몇 개 가져올지 (선택 상품의 메타 청크 1개는 항상 따로 포함)
+DOCS_TOP_K = int(os.getenv("DOCS_TOP_K", 5))  # 외부 문서 청크를 몇 개 가져올지 (선택 상품의 메타 청크 1개는 항상 따로 포함)
+# 코사인 거리가 이보다 먼 청크는 근거에서 뺀다. 실험: 관련 문서 0.43~0.58, 무관한 문서 0.59~0.78 (docs/design_notes.md)
+DOCS_MAX_DISTANCE = float(os.getenv("DOCS_MAX_DISTANCE", 0.65))
 SEARCH_TYPE = "similarity"  # "similarity" 또는 "mmr"
 MMR_FETCH_K = 30        # MMR일 때 먼저 넉넉히 가져올 후보 수
