@@ -51,5 +51,6 @@ INTEREST_TAX_RATE = 0.154
 DOCS_TOP_K = int(os.getenv("DOCS_TOP_K", 5))  # 외부 문서 청크를 몇 개 가져올지 (선택 상품의 메타 청크 1개는 항상 따로 포함)
 # 코사인 거리가 이보다 먼 청크는 근거에서 뺀다. 실험: 관련 문서 0.43~0.58, 무관한 문서 0.59~0.78 (docs/design_notes.md)
 DOCS_MAX_DISTANCE = float(os.getenv("DOCS_MAX_DISTANCE", 0.65))
-SEARCH_TYPE = "similarity"  # "similarity" 또는 "mmr"
+SEARCH_TYPE = os.getenv("SEARCH_TYPE", "similarity")  # "similarity" 또는 "mmr" (F2014)
 MMR_FETCH_K = 30        # MMR일 때 먼저 넉넉히 가져올 후보 수
+MMR_LAMBDA = float(os.getenv("MMR_LAMBDA", 0.5))  # 1 = 유사도만, 0 = 다양성만

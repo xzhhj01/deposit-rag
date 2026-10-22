@@ -17,7 +17,9 @@ generate
 
 from typing import TypedDict
 
+import numpy as np
 from langchain_chroma import Chroma
+from langchain_chroma.vectorstores import maximal_marginal_relevance
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 
@@ -57,7 +59,35 @@ def _meta_source(meta_store: Chroma, product_id: str) -> dict | None:
     }
 
 
-def _doc_sources(docs_store: Chroma, meta: dict, question: str, keywords: list[str]) -> list[dict]:
+def _search(docs_store: Chroma, queries: list[str], where: dict, search_type: str) -> list[list[tuple]]:
+    """검색어마다 (메타데이터, 본문, 거리) 목록. 검색어 임베딩은 한 번에 만든다.
+
+    similarity : 가까운 순으로 Top-k
+    mmr        : 가까운 순으로 MMR_FETCH_K 개를 넉넉히 가져온 뒤, 이미 고른 청크와 내용이 겹치지 않는 것을
+                 우선해 Top-k 를 고른다 (F2014). λ=1 이면 유사도만, λ=0 이면 다양성만 본다.
+    """
+    vectors = docs_store.embeddings.embed_documents(queries)
+    mmr = search_type == "mmr"
+    found = docs_store._collection.query(
+        query_embeddings=vectors,
+        n_results=config.MMR_FETCH_K if mmr else config.DOCS_TOP_K,
+        where=where,
+        include=["documents", "metadatas", "distances"] + (["embeddings"] if mmr else []),
+    )
+    per_query = []
+    for i, vector in enumerate(vectors):
+        rows = list(zip(found["metadatas"][i], found["documents"][i], found["distances"][i]))
+        if mmr and rows:
+            picked = maximal_marginal_relevance(
+                np.array(vector), found["embeddings"][i], lambda_mult=config.MMR_LAMBDA, k=config.DOCS_TOP_K
+            )
+            rows = [rows[j] for j in picked]
+        per_query.append(rows)
+    return per_query
+
+
+def _doc_sources(docs_store: Chroma, meta: dict, question: str, keywords: list[str],
+                 search_type: str) -> list[dict]:
     where = {"$or": [
         {"scope": "common"},
         {"company": meta["company"]},
@@ -68,12 +98,10 @@ def _doc_sources(docs_store: Chroma, meta: dict, question: str, keywords: list[s
     queries = [question, f"{meta['company']} {meta['name']} {question}", *keywords]
 
     merged: dict[str, dict] = {}
-    for query in queries:
-        results = docs_store.similarity_search_with_score(query, k=config.DOCS_TOP_K, filter=where)
-        for rank, (doc, distance) in enumerate(results, start=1):
+    for results in _search(docs_store, queries, where, search_type):
+        for rank, (m, text, distance) in enumerate(results, start=1):
             if distance > config.DOCS_MAX_DISTANCE:  # 너무 먼 청크는 순위와 관계없이 버린다
                 continue
-            m = doc.metadata
             # 같은 위키 문서가 공통 · 상품 범위로 두 번 색인돼 있어도 내용은 같다 → 문서 ID + 순번으로 묶는다.
             key = f"{m['doc_id']}:{m['chunk_index']}"
             source = merged.setdefault(key, {
@@ -81,7 +109,7 @@ def _doc_sources(docs_store: Chroma, meta: dict, question: str, keywords: list[s
                 "title": m["title"],
                 "source_type": m["source_type"],
                 "url": m["url"],
-                "text": doc.page_content.split("\n", 1)[-1],  # 색인할 때 붙인 제목 줄은 뺀다
+                "text": text.split("\n", 1)[-1],  # 색인할 때 붙인 제목 줄은 뺀다
                 "distance": distance,
                 "rrf": 0.0,
             })
@@ -93,15 +121,19 @@ def _doc_sources(docs_store: Chroma, meta: dict, question: str, keywords: list[s
     return sorted(merged.values(), key=lambda s: -s["rrf"])[: config.DOCS_TOP_K]
 
 
-def build_graph(meta_store: Chroma, docs_store: Chroma, model: BaseChatModel, history_turns: int = 6):
-    """저장소와 모델을 받아 그래프를 만든다. 앱은 한 번 만들어 캐시해 두고 계속 쓴다."""
+def build_graph(meta_store: Chroma, docs_store: Chroma, model: BaseChatModel, history_turns: int = 6,
+                search_type: str | None = None):
+    """저장소와 모델을 받아 그래프를 만든다. 앱은 한 번 만들어 캐시해 두고 계속 쓴다.
+    search_type 을 주면 config.SEARCH_TYPE 대신 쓴다 — 유사도 · MMR 비교용 (F2014)."""
+    search_type = search_type or config.SEARCH_TYPE
 
     def retrieve(state: RagState) -> RagState:
         meta_source = _meta_source(meta_store, state["product_id"])
         if meta_source is None:
             return {"sources": [], "item_label": state["product_id"]}
         meta = meta_source.pop("_meta")
-        sources = [meta_source] + _doc_sources(docs_store, meta, state["question"], state.get("keywords", []))
+        sources = [meta_source] + _doc_sources(docs_store, meta, state["question"], state.get("keywords", []),
+                                               search_type)
         label = f"{meta['name']} · {meta['company']}"
         return {"sources": sources, "item_label": label}
 
