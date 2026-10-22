@@ -1,4 +1,4 @@
-# AI 코어 프로젝트 2회차 — Movie Lab
+# AI 코어 프로젝트 2회차 — 금리 돋보기 (예·적금 RAG 서비스)
 # 버전은 요구사항 정의서 1.2 5) 필수 라이브러리 기준으로 고정한다.
 #
 #     pip install -r requirements.txt
@@ -20,3 +20,6 @@ streamlit==1.62.0
 requests==2.34.2
 python-dotenv==1.2.3
 typing-extensions==4.16.0
+
+# 심화 F2016 — PDF 문서 출처 (요구사항정의서 참고자료의 pypdf)
+pypdf==6.1.1

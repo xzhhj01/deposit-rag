@@ -73,23 +73,33 @@ def split_text(text: str, chunk_size: int | None = None, chunk_overlap: int | No
     return splitter.split_text(text)
 
 
-def index_document(store: Chroma, doc: dict) -> int:
-    """문서 1건을 청킹해 색인한다. 저장한 청크 수를 돌려준다.
+def index_documents(store: Chroma, docs: list[dict]) -> int:
+    """문서 여러 건을 청킹해 한 번에 색인한다. 저장한 청크 수를 돌려준다.
 
     청크 id = {scope_key}:{doc_id}:{순번}   예) common:wiki-12345:0, company:국민은행:wiki-678:3
     다시 색인할 때는 같은 문서의 이전 청크를 먼저 지운다 — 청크 크기를 줄였다 늘렸다 하면
     순번 개수가 달라져, 지우지 않으면 예전 청크가 남아 섞인다.
+    문서마다 따로 임베딩을 요청하면 용어사전(700항목)처럼 문서가 많을 때 10분 넘게 걸린다 → 모아서 batch 로 보낸다.
     """
-    key = scope_key(doc)
-    store._collection.delete(where={"$and": [{"doc_id": doc["doc_id"]}, {"scope_key": key}]})
+    by_scope: dict[str, list[str]] = {}
+    texts, ids, metadatas = [], [], []
+    for doc in docs:
+        key = scope_key(doc)
+        by_scope.setdefault(key, []).append(doc["doc_id"])
+        metadata = {field: doc.get(field) or "" for field in DOC_METADATA_FIELDS}
+        metadata["scope_key"] = key
+        # 문서가 chunk_size 를 지정하면 그 값으로 자른다 (출처 종류별 청킹 — F2016)
+        for i, chunk in enumerate(split_text(doc["text"], chunk_size=doc.get("chunk_size"))):
+            texts.append(f"{doc['title']}\n{chunk}")  # 청크마다 제목을 붙여 무슨 문서의 조각인지 알게 한다
+            ids.append(f"{key}:{doc['doc_id']}:{i}")
+            metadatas.append({**metadata, "chunk_index": i})
 
-    chunks = split_text(doc["text"])
-    metadata = {field: doc.get(field) or "" for field in DOC_METADATA_FIELDS}
-    metadata["scope_key"] = key
-    upsert(
-        store,
-        texts=[f"{doc['title']}\n{chunk}" for chunk in chunks],  # 청크마다 제목을 붙여 무슨 문서의 조각인지 알게 한다
-        ids=[f"{key}:{doc['doc_id']}:{i}" for i in range(len(chunks))],
-        metadatas=[{**metadata, "chunk_index": i} for i in range(len(chunks))],
-    )
-    return len(chunks)
+    for key, doc_ids in by_scope.items():
+        store._collection.delete(where={"$and": [{"doc_id": {"$in": doc_ids}}, {"scope_key": key}]})
+    upsert(store, texts, ids, metadatas)
+    return len(texts)
+
+
+def index_document(store: Chroma, doc: dict) -> int:
+    """문서 1건 색인 — 질문 시점 수집처럼 문서가 하나씩 들어올 때."""
+    return index_documents(store, [doc])

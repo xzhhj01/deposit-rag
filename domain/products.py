@@ -35,6 +35,19 @@ COMMON_WIKI_TITLES = [
     "네오뱅크", "금융감독원", "소득세 (대한민국)", "원천징수", "금융소득종합과세",
 ]
 
+# PDF 문서 출처 (F2016) — 파일은 data/pdf/ 에 직접 내려받아 둔다 (저장소에는 올리지 않는다, 각 기관 저작권).
+#   chunking: "page"     — 짧은 안내 자료. 쪽마다 주제가 나뉘어 있어 쪽 = 문서 하나
+#             "glossary" — 용어사전. 용어 항목 하나 = 문서 하나 ("연관검색어" 줄이 항목의 끝)
+PDF_SOURCES = [
+    {"file": "예금자보호제도 안내장.pdf", "name": "예금자보호제도 안내장", "publisher": "예금보험공사",
+     "url": "https://www.kdic.or.kr/voc/pamphlet/list", "chunking": "page"},
+    {"file": "예금자보호제도 리플릿.pdf", "name": "예금자보호제도 리플릿", "publisher": "예금보험공사",
+     "url": "https://www.kdic.or.kr/voc/pamphlet/list", "chunking": "page"},
+    {"file": "2026_경제금융용어 800선.pdf", "name": "경제금융용어 800선", "publisher": "한국은행",
+     "url": "https://www.bok.or.kr/portal/bbs/B0000249/view.do?nttId=10096081&menuNo=200765",
+     "chunking": "glossary"},
+]
+
 # 우대조건 칸에 "없음"류만 적힌 경우 — 우대조건이 없는 상품으로 본다.
 NO_CONDITION = {"", "없음", "해당없음", "해당사항없음", "우대조건없음", "-"}
 
