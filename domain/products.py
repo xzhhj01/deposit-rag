@@ -11,6 +11,7 @@
 """
 
 import json
+import re
 import time
 from datetime import date
 
@@ -25,6 +26,14 @@ SOURCE_URL = "https://finlife.fss.or.kr"
 KINDS = {"deposit": "정기예금", "saving": "적금"}
 GROUPS = {"020000": "은행", "030300": "저축은행"}
 JOIN_DENY = {"1": "제한 없음", "2": "서민전용", "3": "일부 제한"}
+
+# 모든 상품이 함께 쓰는 공통 개념 문서 (scope=common). 위키 검색 결과를 눈으로 확인하고 정확한 제목으로 고정했다.
+# 검색어를 그대로 쓰면 엉뚱한 문서가 섞인다 — 예) "단리" → 청풍면, "중도해지" → 중도우파 (docs/design_notes.md)
+COMMON_WIKI_TITLES = [
+    "예금보험", "예금보험공사", "이자", "이자율", "단리", "복리", "기준금리", "한국은행 기준금리",
+    "정기예금", "적금", "예금", "만기", "상호저축은행", "2011년 상호저축은행 영업정지 사건",
+    "네오뱅크", "금융감독원", "소득세 (대한민국)", "원천징수", "금융소득종합과세",
+]
 
 # 우대조건 칸에 "없음"류만 적힌 경우 — 우대조건이 없는 상품으로 본다.
 NO_CONDITION = {"", "없음", "해당없음", "해당사항없음", "우대조건없음", "-"}
@@ -128,6 +137,12 @@ def load_products() -> list[dict]:
     if not config.PRODUCTS_PATH.exists():
         return []
     return json.loads(config.PRODUCTS_PATH.read_text(encoding="utf-8"))
+
+
+def company_wiki_candidates(company: str) -> list[str]:
+    """금융사 이름으로 위키 문서 제목 후보를 만든다. 예) '주식회사 케이뱅크' → ['주식회사 케이뱅크', '케이뱅크']"""
+    plain = re.sub(r"^\s*(주식회사|㈜|\(주\))\s*|\s*(주식회사|㈜|\(주\))\s*$", "", company).strip()
+    return list(dict.fromkeys(c for c in [company, plain] if c))
 
 
 # ── 색인 텍스트 (F2001) ───────────────────────────────────────────────
