@@ -13,7 +13,6 @@ LangGraph 는 retrieve · generate 두 노드로 둔다 (F2007). 수집은 그�
 """
 
 import json
-import re
 from datetime import date
 from typing import Callable
 
@@ -23,6 +22,7 @@ from langchain_core.language_models import BaseChatModel
 import config
 from collect.wiki import fetch_page, search
 from domain.products import company_wiki_candidates
+from rag.parsing import parse_json_array
 from rag.prompts import KEYWORD_SYSTEM, SELECT_SYSTEM, build_keyword_prompt, build_select_prompt
 from store.vectordb import index_document
 
@@ -43,26 +43,13 @@ def _save_manifest(manifest: dict) -> None:
     MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-# ── LLM 출력 파싱 ────────────────────────────────────────────────────
-def _parse_json_array(text: str) -> list:
-    """LLM 답에서 첫 JSON 배열을 꺼낸다. 앞뒤에 설명이 붙거나 코드 블록에 싸여 와도 읽는다. 실패하면 []."""
-    match = re.search(r"\[.*?\]", text, re.DOTALL)
-    if not match:
-        return []
-    try:
-        value = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return []
-    return value if isinstance(value, list) else []
-
-
 def extract_keywords(model: BaseChatModel, item_label: str, item_kind: str, question: str) -> list[str]:
     """프롬프트 1 — 위키 검색어 목록. 공시만으로 답할 수 있는 질문이면 빈 목록."""
     answer = model.invoke([
         {"role": "system", "content": KEYWORD_SYSTEM},
         {"role": "user", "content": build_keyword_prompt(item_label, item_kind, question)},
     ]).content
-    keywords = [k.strip() for k in _parse_json_array(answer) if isinstance(k, str) and k.strip()]
+    keywords = [k.strip() for k in parse_json_array(answer) if isinstance(k, str) and k.strip()]
     return list(dict.fromkeys(keywords))[:MAX_KEYWORDS]
 
 
@@ -72,7 +59,7 @@ def select_candidates(model: BaseChatModel, question: str, candidates: list[dict
         {"role": "system", "content": SELECT_SYSTEM},
         {"role": "user", "content": build_select_prompt(question, candidates)},
     ]).content
-    picked = [n for n in _parse_json_array(answer) if isinstance(n, int) and 1 <= n <= len(candidates)]
+    picked = [n for n in parse_json_array(answer) if isinstance(n, int) and 1 <= n <= len(candidates)]
     return sorted({n - 1 for n in picked})
 
 

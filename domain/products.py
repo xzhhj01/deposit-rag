@@ -188,6 +188,15 @@ def build_item_text(product: dict) -> str:
     return "\n".join(lines)
 
 
+def split_conditions(product: dict) -> list[str]:
+    """우대조건 원문을 한 줄 = 조건 하나로 나눈다. 조건 탐색 색인용 (F2011).
+
+    1단계 실험: 상품 전체 텍스트로는 "대중교통 우대" 상품이 390위, 줄 단위로 나누면 6위. (docs/design_notes.md)
+    """
+    lines = re.split(r"\n|(?=[①-⑩])", product["special_condition"])
+    return [line.strip(" -*•") for line in lines if len(line.strip(" -*•")) > 4]
+
+
 def build_item_metadata(product: dict) -> dict:
     """Vector DB에 텍스트와 함께 저장할 값. Chroma 메타데이터는 str · int · float · bool 만 된다.
 

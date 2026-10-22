@@ -34,11 +34,18 @@ EMBEDDING_MODEL = "text-embedding-3-small"  # 0단계에서 GMS 동작 확인 (1
 # ── 컬렉션 ───────────────────────────────────────────────────────────
 META_COLLECTION = "product_meta"   # 상품 1개 = 1청크, id = 상품 ID
 DOCS_COLLECTION = "finance_docs"   # 외부 문서(위키 · PDF) 청크, id = 상품 ID:문서 ID:순번
+# 조건 탐색(F2011) 전용 보조 색인 — 같은 상품 메타데이터를 '우대조건 한 줄 = 청크 하나'로 다시 자른 것
+CONDITION_COLLECTION = "product_conditions"
 
 # ── 청킹 (F2005) ─────────────────────────────────────────────────────
 # 실험할 때는 파일을 고치지 않고 환경변수로 덮어쓸 수 있다.  예) CHUNK_SIZE=500 python scripts/build_docs_index.py
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1000))     # 글자 수
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 200))  # 앞 청크와 겹치는 글자 수 — 문장이 경계에서 잘려도 의미가 이어지게
+
+# ── 금리 계산 가정 (F2010 특화 기능) ──────────────────────────────────
+# 근거 문서에서 온 값이 아니라 계산에 쓰는 '가정'이다. 화면에 가정이라고 밝혀 표시한다.
+# 이자소득세 14% + 지방소득세 1.4% = 15.4% (일반과세 기준. 비과세 · 세금우대 상품은 다르다)
+INTEREST_TAX_RATE = 0.154
 
 # ── 검색 (F2006 · F2014) ─────────────────────────────────────────────
 DOCS_TOP_K = int(os.getenv("DOCS_TOP_K", 5))  # 외부 문서 청크를 몇 개 가져올지 (선택 상품의 메타 청크 1개는 항상 따로 포함)

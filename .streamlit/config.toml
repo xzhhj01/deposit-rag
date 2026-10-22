@@ -1,0 +1,9 @@
+# NF2004 — 화면에 오류 추적 정보(트레이스백)를 내보내지 않는다.
+# 기본값은 예상하지 못한 오류가 나면 브라우저에 파이썬 트레이스백 전체를 보여 준다.
+# 상세 오류는 서버 터미널 로그에만 남는다.
+[client]
+showErrorDetails = "none"
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

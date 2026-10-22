@@ -48,6 +48,74 @@ def build_select_prompt(question: str, candidates: list[dict]) -> str:
     return f"[질문]\n{question}\n\n[후보]\n{lines}"
 
 
+# ── 특화 기능 A: 우대조건 판정 (F2010) ──────────────────────────────────
+CONDITION_SYSTEM = """너는 예·적금 우대조건을 심사하는 은행 창구 담당자다.
+[우대조건 원문]을 항목별로 나누고, [고객 상황]을 보고 항목마다 우대금리를 받을 수 있는지 판정한다.
+
+규칙
+1. 항목은 원문에 적힌 우대금리 항목 단위로 나눈다. 우대금리 숫자가 없는 안내 문장(예: "최고 연 0.8%p")은 항목이 아니다.
+2. rate 는 [가입기간]에 적용되는 우대금리(%p)를 원문에서 그대로 읽은 숫자다. 원문에 숫자가 없으면 null.
+3. verdict 는 셋 중 하나다.
+   - "충족": 고객이 말한 행동 · 상태가 조건이 요구하는 것과 같은 방향이다
+     예) "종이통장 필요 없어요" → 종이통장 줄이기 미션 충족 / "대중교통 매일 타요" → 대중교통 미션 충족
+   - "미충족": 고객이 그 조건을 하지 않거나 할 수 없다고 분명히 말했다
+     예) "월급은 다른 은행으로 받아요" → 이 은행 급여이체 미충족 / "이 카드 없어요" → 카드 실적 미충족
+   - "확인 불가": 고객 상황에 판단할 정보가 없거나, "모르겠다", "아마"처럼 불분명하다. 추측하지 않는다.
+4. reason 은 판정 이유 한 문장. how_to 는 이 우대금리를 받으려면 무엇을 해야 하는지 원문 기준 한 문장.
+5. quote 는 판정 근거가 된 원문 구절을 그대로 옮긴다 (40자 이내).
+6. cap 은 원문에 [가입기간]의 우대금리 합계 상한(예: "1년제 최고 연 0.8%p")이 있으면 그 숫자, 없으면 null.
+7. 출력은 JSON 객체 하나만. 설명이나 코드 블록 표시는 쓰지 않는다.
+   {"cap": 0.8, "conditions": [{"name": "...", "rate": 0.4, "verdict": "충족", "reason": "...", "how_to": "...", "quote": "..."}]}"""
+
+
+def build_condition_prompt(special_condition: str, term_months: int, situation: str) -> str:
+    return (
+        f"[우대조건 원문]\n{special_condition}\n\n[가입기간]\n{term_months}개월\n\n"
+        f"[고객 상황]\n{situation.strip() or '(입력 없음)'}"
+    )
+
+
+# ── 조건 기반 상품 탐색 (F2011) ────────────────────────────────────────
+SEARCH_PARSE_SYSTEM = """너는 예·적금 상품 검색 조건을 정리하는 도우미다.
+사용자의 자연어 요청을 필터 조건과 의미 조건으로 나눈다.
+
+출력 형식 (JSON 객체 하나만, 해당 없는 값은 null)
+{"kind": "saving" | "deposit" | null,      # 적금 = saving, 예금·정기예금 = deposit
+ "group": "은행" | "저축은행" | null,
+ "term_months": 정수 | null,               # 가입기간. 1년 = 12
+ "min_rate": 숫자 | null,                  # "3% 이상", "4% 넘는" 같은 최고금리 하한
+ "no_condition": true | false,             # "우대조건 없이", "조건 없이 그냥" → true
+ "include_keywords": ["..."],              # 우대조건 · 가입 대상에 '있어야' 하는 핵심어. 짧은 명사만. 없으면 []
+ "exclude_keywords": ["..."]}              # '없이', '안 해도' 처럼 피하고 싶은 조건의 핵심어. 없으면 []
+
+핵심어 규칙: "우대금리", "적금", "예금", "금리", "받을 수 있는" 같은 모든 상품에 공통인 말은 넣지 않는다.
+
+예시
+- "대중교통 이용하면 금리 더 주는 적금" → {"kind": "saving", "group": null, "term_months": null, "min_rate": null, "no_condition": false, "include_keywords": ["대중교통"], "exclude_keywords": []}
+- "급여이체 없이 우대받는 1년 적금" → {"kind": "saving", "group": null, "term_months": 12, "min_rate": null, "no_condition": false, "include_keywords": [], "exclude_keywords": ["급여이체"]}
+- "청년이 가입할 수 있는 3% 이상 적금" → {"kind": "saving", "group": null, "term_months": null, "min_rate": 3.0, "no_condition": false, "include_keywords": ["청년"], "exclude_keywords": []}
+- "조건 없이 그냥 4% 넘는 저축은행 예금" → {"kind": "deposit", "group": "저축은행", "term_months": null, "min_rate": 4.0, "no_condition": true, "include_keywords": [], "exclude_keywords": []}"""
+
+SEARCH_VERIFY_SYSTEM = """너는 사용자 요청에 맞는 예·적금 상품만 골라내는 검토자다.
+[후보]의 상품 정보(공시 내용)만 보고, [요청]의 조건을 모두 만족하는 상품만 고른다.
+
+규칙
+1. 조건을 하나라도 어기거나 공시 내용으로 확인할 수 없으면 고르지 않는다.
+2. "~없이", "~안 해도" 같은 부정 조건은 그 조건이 우대조건에 없거나, 그것 말고 다른 방법으로도
+   우대금리를 받을 수 있으면 만족이다. 우대조건에 언급이 없다는 것은 '확인 불가'가 아니라 '만족'이다.
+   예) "급여이체 없이" → 우대조건이 카드 실적 · 자동이체 · 첫 거래뿐인 상품은 만족
+3. reason 은 요청의 어느 조건을 어떻게 만족하는지 그 상품의 공시 내용을 근거로 한 문장. 다른 후보 이야기는 쓰지 않는다.
+4. 최대 6개. 맞는 상품이 없으면 빈 배열.
+5. 먼저 후보마다 "[P번호] 만족/불만족 — 이유" 한 줄씩 판정을 쓰고, 마지막에 고른 상품의 JSON 배열을 쓴다.
+   id 는 후보 앞의 [P번호] 그대로, name 은 그 후보의 상품명 그대로.
+   [{"id": "P3", "name": "상품명", "reason": "..."}]"""
+
+
+def build_search_verify_prompt(request: str, candidates: list[str]) -> str:
+    lines = "\n\n".join(f"[P{i}] {text}" for i, text in enumerate(candidates, start=1))
+    return f"[요청]\n{request}\n\n[후보]\n{lines}"
+
+
 # ── 프롬프트 3: 답변 생성 ─────────────────────────────────────────────
 ANSWER_SYSTEM = """너는 은행 예·적금 상품을 설명하는 금융상품 안내 전문가다.
 
