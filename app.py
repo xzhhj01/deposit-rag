@@ -16,6 +16,7 @@ UI 는 화면만 그린다. 수집 · 검색 · 생성 · 계산은 각 모듈�
 
 import re
 
+import openai
 import streamlit as st
 
 import config
@@ -103,6 +104,17 @@ def render_sources(answer: str, sources: list[dict]) -> None:
             st.markdown(f"**[근거 {', '.join(map(str, numbers))}]** {title} · {source_type} · [원문]({url})")
 
 
+def error_message(error: Exception) -> str:
+    """오류 종류만 골라 사용자가 할 일을 알려 준다. 오류 내용 · 트레이스백은 보이지 않는다. (F2012 · NF2004)"""
+    if isinstance(error, openai.AuthenticationError):
+        return "GMS 키가 올바르지 않거나 만료되었습니다. project/.env 의 GMS_KEY 를 확인하고 앱을 다시 실행하세요."
+    if isinstance(error, (openai.APIConnectionError, openai.APITimeoutError)):
+        return "LLM 서버에 연결하지 못했습니다. 네트워크를 확인하고 잠시 후 다시 시도해 주세요."
+    if isinstance(error, openai.RateLimitError):
+        return "요청이 많아 잠시 제한되었습니다. 잠시 후 다시 시도해 주세요."
+    return "처리 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요."
+
+
 def collect_summary(report: dict) -> str:
     """수집 결과 한 줄 — 무엇을 찾아 무엇을 골랐는지. 프롬프트 전문은 보이지 않는다. (NF2004)"""
     if report["from_cache"]:
@@ -141,7 +153,7 @@ def render_chat(product: dict) -> None:
     with st.chat_message("assistant"):
         # 최근 대화를 함께 넘겨 "그럼 2년이면?" 같은 이어지는 질문을 이해하게 한다. (step6)
         history = [{"role": m["role"], "content": m["content"]} for m in messages[:-1]]
-        sources, answer = [], ""
+        sources, answer, failure = [], "", "잠시 후 다시 시도해 주세요."
 
         # 수집 → 그래프(retrieve → generate). 단계마다 진행 상태를 바꾼다. (F2012)
         with st.status("관련 문서를 확인하고 있습니다...", expanded=False) as status:
@@ -163,14 +175,15 @@ def render_chat(product: dict) -> None:
                     elif "generate" in update:
                         answer = update["generate"]["answer"]
                 status.update(label=f"완료 · 검색한 근거 {len(sources)}건", state="complete")
-            except Exception:  # 상세 오류(트레이스백)는 화면에 내보내지 않는다 (NF2004)
+            except Exception as error:  # 상세 오류(트레이스백)는 화면에 내보내지 않는다 (NF2004)
                 status.update(label="처리 중 문제가 생겼습니다", state="error")
+                failure = error_message(error)
 
         if answer:
             st.markdown(answer)
             render_sources(answer, sources)
         else:
-            st.error("답변을 만들지 못했습니다. 잠시 후 다시 시도해 주세요.")
+            st.error(f"답변을 만들지 못했습니다. {failure}")
 
     if answer:
         messages.append({"role": "assistant", "content": answer, "sources": sources})
@@ -209,8 +222,9 @@ def render_rate_check(product: dict) -> None:
                 try:
                     judgment = judge_conditions(get_model(), product, term, situation)
                     status.update(label=f"우대조건 {len(judgment['conditions'])}개 판정 완료", state="complete")
-                except Exception:  # NF2004
-                    status.update(label="판정 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.", state="error")
+                except Exception as error:  # NF2004
+                    status.update(label="판정 중 문제가 생겼습니다", state="error")
+                    st.error(error_message(error))
                     return
         st.session_state.rate_results[product_id] = {
             "judgment": judgment, "estimate": estimate(product, term, int(amount), judgment),
@@ -224,15 +238,16 @@ def render_rate_check(product: dict) -> None:
 def render_rate_result(product: dict, judgment: dict, e: dict) -> None:
     low, high = e["low"], e["high"]
     rate_text = f"{low['rate']}%" if low["rate"] == high["rate"] else f"{low['rate']} ~ {high['rate']}%"
-    money_text = (f"{low['after_tax']:,}원" if low["after_tax"] == high["after_tax"]
-                  else f"{low['after_tax']:,} ~ {high['after_tax']:,}원")
 
     st.divider()
     a, b, c = st.columns(3)
     a.metric("광고 최고금리", f"{e['advertised_max']}%", help="공시된 최고우대금리")
     b.metric("내 예상 금리", rate_text, delta=f"{low['rate'] - e['advertised_max']:+.2f}%p", delta_color="off")
-    c.metric(f"세후 이자 ({e['term']}개월)", money_text,
+    # 범위를 지표 하나에 넣으면 칸이 좁아 잘린다("86,609 ~ 92,…") → 확실히 받는 금액만 지표로, 위쪽 끝은 아래 줄에
+    c.metric(f"세후 이자 ({e['term']}개월)", f"{low['after_tax']:,}원",
              help=f"최고금리를 다 받으면 {e['max']['after_tax']:,}원")
+    if high["after_tax"] != low["after_tax"]:
+        c.caption(f"확인 불가까지 받으면 최대 {high['after_tax']:,}원")
     st.caption(f"기본금리 {e['base_rate']}% · {e['rate_type']} · 원금 {e['principal']:,}원 · "
                "범위의 앞쪽은 '충족'만, 뒤쪽은 '확인 불가'까지 모두 받는 경우")
 
@@ -295,8 +310,9 @@ def render_search(products: dict[str, dict]) -> None:
                 result = search_products(get_model(), cached_condition_store(), products, request.strip())
                 st.session_state.search_result = {"request": request.strip(), **result}
                 status.update(label=f"맞는 상품 {len(result['results'])}개", state="complete")
-            except Exception:  # NF2004
-                status.update(label="검색 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.", state="error")
+            except Exception as error:  # NF2004
+                status.update(label="검색 중 문제가 생겼습니다", state="error")
+                st.error(error_message(error))
 
     result = st.session_state.get("search_result")
     if not result:

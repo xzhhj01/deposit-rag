@@ -15,6 +15,7 @@ import re
 from langchain_core.language_models import BaseChatModel
 
 import config
+from domain.products import split_conditions
 from rag.parsing import parse_json_object
 from rag.prompts import CONDITION_SYSTEM, build_condition_prompt
 
@@ -34,6 +35,25 @@ def _rate_in_text(rate: float, text: str) -> bool:
     """LLM이 읽어 온 우대금리 숫자가 원문에 실제로 있는지. 0.4 ↔ '0.4%p', '0.40%', '.4%' 모두 허용."""
     numbers = {float(n) for n in re.findall(r"\d*\.?\d+", text.replace(",", ""))}
     return any(abs(rate - n) < 1e-9 for n in numbers)
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
+def _source_quote(quote: str, name: str, original: str) -> str:
+    """화면에 '공시 원문'으로 보여 줄 구절. LLM이 준 구절이 원문에 그대로 있을 때만 쓴다.
+
+    LLM은 원문 대신 고객이 입력한 문장("종이통장은 필요 없어요")을 인용하기도 했다 → 근거가 아닌 것이 근거처럼 보인다.
+    원문에 없으면 조건 이름이 들어 있는 원문 줄로 바꾸고, 그것도 없으면 비워 둔다.
+    """
+    if quote and _squash(quote) in _squash(original):
+        return quote.strip()
+    key = _squash(name)[:6]
+    for line in split_conditions({"special_condition": original}):
+        if key and key in _squash(line):
+            return line[:80]
+    return ""
 
 
 def judge_conditions(model: BaseChatModel, product: dict, term: int, situation: str) -> dict:
@@ -56,7 +76,7 @@ def judge_conditions(model: BaseChatModel, product: dict, term: int, situation: 
             "verdict": c.get("verdict") if c.get("verdict") in VERDICTS else "확인 불가",
             "reason": str(c.get("reason") or ""),
             "how_to": str(c.get("how_to") or ""),
-            "quote": str(c.get("quote") or ""),
+            "quote": _source_quote(str(c.get("quote") or ""), str(c["name"]), product["special_condition"]),
             # 원문에 없는 숫자는 계산에 넣지 않는다 — 근거 없는 숫자로 금리를 부풀리지 않게
             "verified": rate is not None and _rate_in_text(rate, product["special_condition"]),
         })

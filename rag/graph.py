@@ -15,6 +15,7 @@ generate
     프롬프트 3 + 최근 대화로 답한다. 근거 번호는 retrieve 가 만든 순서 그대로다.
 """
 
+import re
 from typing import TypedDict
 
 import numpy as np
@@ -121,6 +122,14 @@ def _doc_sources(docs_store: Chroma, meta: dict, question: str, keywords: list[s
     return sorted(merged.values(), key=lambda s: -s["rrf"])[: config.DOCS_TOP_K]
 
 
+USER_PROVIDED = re.compile(r"(제공해\s*주신|제공하신|주신|보내주신)\s*(근거|자료|문서|공시)")
+
+
+def _fix_source_wording(answer: str) -> str:
+    """근거는 서비스가 찾아온 자료다. 프롬프트 규칙에도 "제공해주신 근거"가 계속 나와(화면 캡처 ⑤ ⑧) 코드로 고친다."""
+    return USER_PROVIDED.sub(lambda m: f"찾은 {m.group(2)}", answer)
+
+
 def build_graph(meta_store: Chroma, docs_store: Chroma, model: BaseChatModel, history_turns: int = 6,
                 search_type: str | None = None):
     """저장소와 모델을 받아 그래프를 만든다. 앱은 한 번 만들어 캐시해 두고 계속 쓴다.
@@ -144,7 +153,7 @@ def build_graph(meta_store: Chroma, docs_store: Chroma, model: BaseChatModel, hi
             + history
             + [{"role": "user", "content": build_answer_prompt(state["item_label"], state["sources"], state["question"])}]
         )
-        return {"answer": model.invoke(messages).content}
+        return {"answer": _fix_source_wording(model.invoke(messages).content)}
 
     graph = StateGraph(RagState)
     graph.add_node("retrieve", retrieve)

@@ -108,6 +108,6 @@ docs/                       설계 · 비교 · 검증 문서
 |---|---|
 | [요구사항 정의서](docs/requirements.md) | 도메인 선택 근거, 기능 · 비기능 요구사항 표와 구현 위치 |
 | [RAG 파이프라인 설계문서](docs/rag_pipeline_design.md) | 컬렉션 · 메타데이터, 수집 · 청킹 · 색인 흐름, 병합 · 중복 제거, 프롬프트, 설정값의 근거 |
-| [설계 노트](docs/design_notes.md) | 단계별로 겪은 문제 18가지와 해결 과정 (실험 수치 포함) |
+| [설계 노트](docs/design_notes.md) | 단계별로 겪은 문제 22가지와 해결 과정 (실험 수치 포함) |
 | [검증 결과](docs/verification.md) | 4장 체크리스트 · 요구사항 대조표 · 자동 검증 결과 · 캡처 목록 |
 | [MMR 비교](docs/mmr_comparison.md) · [RAG 전후 비교](docs/rag_comparison.md) | 심화 F2014 · F2015 |
